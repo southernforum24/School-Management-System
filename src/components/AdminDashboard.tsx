@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import * as XLSX from 'xlsx';
 import { Subject, Student, GradeRecord, User } from '../types';
 import { CheckCircle, AlertCircle, ShieldCheck, Users, BookOpen, UserCog, GraduationCap, Settings, Edit2, Save, X, Eye, UploadCloud, FileSpreadsheet, BarChart3, TrendingUp, Layers, Trash2 } from 'lucide-react';
 import { calculateSemesterTotal, calculateAverage, calculateGrade } from '../utils';
@@ -28,6 +29,10 @@ export default function AdminDashboard({ subjects, students, grades, users, onUp
   // Edit Student State
   const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
   const [editStudent, setEditStudent] = useState<Partial<Student>>({});
+
+  // Add Student State
+  const [isAddingStudent, setIsAddingStudent] = useState(false);
+  const [newStudent, setNewStudent] = useState<Partial<Student>>({});
 
   // Add User State
   const [isAddingUser, setIsAddingUser] = useState(false);
@@ -59,8 +64,9 @@ export default function AdminDashboard({ subjects, students, grades, users, onUp
   // Import Data State
   const [isImportingData, setIsImportingData] = useState(false);
   const [importStep, setImportStep] = useState<'upload' | 'preview'>('upload');
-  const [importType, setImportType] = useState<'users' | 'students'>('users');
+  const [importType, setImportType] = useState<'users' | 'students' | 'subjects'>('users');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [parsedData, setParsedData] = useState<any[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -95,13 +101,87 @@ export default function AdminDashboard({ subjects, students, grades, users, onUp
 
   const handleFileSelect = (file: File) => {
     setSelectedFile(file);
-    setImportStep('preview');
+    
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const json = XLSX.utils.sheet_to_json(worksheet);
+        setParsedData(json);
+        setImportStep('preview');
+      } catch (error) {
+        setAlertMessage('เกิดข้อผิดพลาดในการอ่านไฟล์ กรุณาตรวจสอบรูปแบบไฟล์');
+        setSelectedFile(null);
+      }
+    };
+    reader.readAsArrayBuffer(file);
   };
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       handleFileSelect(e.target.files[0]);
     }
+  };
+
+  const handleConfirmImport = () => {
+    if (importType === 'users') {
+      const newUsers: User[] = parsedData.map((row: any, index) => ({
+        id: `u${Date.now()}${index}`,
+        name: row.Name || row.name || row['ชื่อ-สกุล'] || '',
+        username: row.Username || row.username || '',
+        password: row.Password || row.password || '123456',
+        role: (row.Role || row.role || 'teacher').toLowerCase() as any,
+      })).filter(u => u.name && u.username);
+      
+      if (newUsers.length > 0) {
+        onUpdateUsers([...users, ...newUsers]);
+        setAlertMessage(`นำเข้าข้อมูลผู้ใช้สำเร็จ ${newUsers.length} รายการ`);
+      } else {
+        setAlertMessage('ไม่พบข้อมูลที่ถูกต้องในไฟล์');
+      }
+    } else if (importType === 'students') {
+      const newStudents: Student[] = parsedData.map((row: any, index) => ({
+        id: `s${Date.now()}${index}`,
+        nationalId: row.NationalId || row.nationalId || row['เลขประจำตัวประชาชน'] || row['Student ID'] || '',
+        name: row.Name || row.name || row['ชื่อ-สกุล'] || '',
+        gradeLevel: row.Grade || row.grade || row.gradeLevel || row['ชั้นเรียน'] || '',
+        dob: row.DOB || row.dob || row['วันเดือนปีเกิด'] || ''
+      })).filter(s => s.name && s.nationalId);
+
+      if (newStudents.length > 0) {
+        onUpdateStudents([...students, ...newStudents]);
+        setAlertMessage(`นำเข้าข้อมูลนักเรียนสำเร็จ ${newStudents.length} รายการ`);
+      } else {
+        setAlertMessage('ไม่พบข้อมูลที่ถูกต้องในไฟล์');
+      }
+    } else if (importType === 'subjects') {
+      const newSubjects: Subject[] = parsedData.map((row: any, index) => ({
+        id: row.Id || row.id || row['รหัสวิชา'] || `SUBJ${Date.now()}${index}`,
+        name: row.Name || row.name || row['ชื่อวิชา'] || '',
+        className: row.ClassName || row.className || row['ชั้นเรียน'] || '',
+        teacherId: row.TeacherId || row.teacherId || row['รหัสครูผู้สอน'] || '',
+        status: 'Pending Admin Verification',
+        config: {
+          sem1FinalMax: Number(row.Sem1FinalMax || row.sem1FinalMax || row['คะแนนปลายภาคเทอม1']) || 30,
+          sem2FinalMax: Number(row.Sem2FinalMax || row.sem2FinalMax || row['คะแนนปลายภาคเทอม2']) || 30
+        }
+      })).filter(s => s.name && s.className);
+
+      if (newSubjects.length > 0) {
+        onUpdateSubjects([...subjects, ...newSubjects]);
+        setAlertMessage(`นำเข้าข้อมูลรายวิชาสำเร็จ ${newSubjects.length} รายการ`);
+      } else {
+        setAlertMessage('ไม่พบข้อมูลที่ถูกต้องในไฟล์');
+      }
+    }
+    
+    setIsImportingData(false);
+    setImportStep('upload');
+    setSelectedFile(null);
+    setParsedData([]);
   };
 
   const pendingSubjects = useMemo(() => {
@@ -251,6 +331,24 @@ export default function AdminDashboard({ subjects, students, grades, users, onUp
 
   const deleteStudent = (id: string) => {
     setDeleteConfirm({ type: 'student', id });
+  };
+
+  const handleSaveNewStudent = () => {
+    if (newStudent.name && newStudent.nationalId && newStudent.gradeLevel) {
+      const student: Student = {
+        id: `s${Date.now()}`,
+        name: newStudent.name,
+        nationalId: newStudent.nationalId,
+        gradeLevel: newStudent.gradeLevel,
+        dob: newStudent.dob || ''
+      };
+      onUpdateStudents([...students, student]);
+      setIsAddingStudent(false);
+      setNewStudent({});
+      setAlertMessage('เพิ่มนักเรียนเรียบร้อยแล้ว');
+    } else {
+      setAlertMessage('กรุณากรอกข้อมูลให้ครบถ้วน');
+    }
   };
 
   const handleSaveNewUser = () => {
@@ -718,10 +816,7 @@ export default function AdminDashboard({ subjects, students, grades, users, onUp
                 นำเข้าข้อมูล (Excel)
               </button>
               <button 
-                onClick={() => {
-                  setImportType('students');
-                  setIsImportingData(true);
-                }}
+                onClick={() => setIsAddingStudent(true)}
                 className="inline-flex items-center px-4 py-2 text-[15px] font-semibold rounded-[12px] text-[#1C1C1E] bg-[rgba(255,255,255,0.8)] hover:bg-white border border-[rgba(0,0,0,0.1)] transition-all"
               >
                 + เพิ่มนักเรียน
@@ -831,12 +926,24 @@ export default function AdminDashboard({ subjects, students, grades, users, onUp
               </h3>
               <p className="text-[13px] text-[#3C3C43] mt-1 font-medium">กำหนดรายวิชา ครูผู้สอน และสัดส่วนคะแนนปลายภาค</p>
             </div>
-            <button 
-              onClick={() => setIsAddingSubject(true)}
-              className="inline-flex items-center px-4 py-2 text-[15px] font-semibold rounded-[12px] text-[#1C1C1E] bg-[rgba(255,255,255,0.8)] hover:bg-white border border-[rgba(0,0,0,0.1)] transition-all"
-            >
-              + เพิ่มรายวิชา
-            </button>
+            <div className="flex space-x-2">
+              <button 
+                onClick={() => {
+                  setImportType('subjects');
+                  setIsImportingData(true);
+                }}
+                className="inline-flex items-center px-4 py-2 text-[15px] font-semibold rounded-[12px] text-white bg-gradient-to-r from-[#00E5FF] to-[#007AFF] hover:opacity-90 transition-all shadow-lg shadow-[#00E5FF]/20"
+              >
+                <FileSpreadsheet className="w-4 h-4 mr-1.5" />
+                นำเข้าข้อมูล (Excel)
+              </button>
+              <button 
+                onClick={() => setIsAddingSubject(true)}
+                className="inline-flex items-center px-4 py-2 text-[15px] font-semibold rounded-[12px] text-[#1C1C1E] bg-[rgba(255,255,255,0.8)] hover:bg-white border border-[rgba(0,0,0,0.1)] transition-all"
+              >
+                + เพิ่มรายวิชา
+              </button>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-full border-collapse glass-table">
@@ -1310,7 +1417,7 @@ export default function AdminDashboard({ subjects, students, grades, users, onUp
               <div>
                 <h3 className="text-[22px] font-bold text-transparent bg-clip-text bg-gradient-to-r from-[#00E5FF] to-[#007AFF] flex items-center">
                   <UploadCloud className="w-6 h-6 mr-2 text-[#007AFF]" />
-                  {importType === 'users' ? 'User Data Import' : 'Student Data Import'}
+                  {importType === 'users' ? 'User Data Import' : importType === 'students' ? 'Student Data Import' : 'Subject Data Import'}
                 </h3>
                 <p className="text-[13px] text-[#3C3C43] mt-0.5 font-medium">โรงเรียนบ้านตาโละ • Admin</p>
               </div>
@@ -1368,7 +1475,7 @@ export default function AdminDashboard({ subjects, students, grades, users, onUp
                       <h4 className="text-[17px] font-bold text-black">Data Validation Preview</h4>
                       {selectedFile && <p className="text-[13px] text-[#8E8E93] mt-0.5">File: {selectedFile.name}</p>}
                     </div>
-                    <span className="text-[13px] font-medium text-[#3C3C43] bg-black/5 px-3 py-1 rounded-full">5 rows found</span>
+                    <span className="text-[13px] font-medium text-[#3C3C43] bg-black/5 px-3 py-1 rounded-full">{parsedData.length} rows found</span>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="min-w-full border-collapse">
@@ -1380,73 +1487,105 @@ export default function AdminDashboard({ subjects, students, grades, users, onUp
                               <th className="px-6 py-3 text-left text-[12px] font-semibold text-[#3C3C43] uppercase tracking-wider">Username</th>
                               <th className="px-6 py-3 text-left text-[12px] font-semibold text-[#3C3C43] uppercase tracking-wider">Role</th>
                             </>
-                          ) : (
+                          ) : importType === 'students' ? (
                             <>
                               <th className="px-6 py-3 text-left text-[12px] font-semibold text-[#3C3C43] uppercase tracking-wider">Student ID</th>
                               <th className="px-6 py-3 text-left text-[12px] font-semibold text-[#3C3C43] uppercase tracking-wider">Name</th>
                               <th className="px-6 py-3 text-left text-[12px] font-semibold text-[#3C3C43] uppercase tracking-wider">Grade</th>
+                            </>
+                          ) : (
+                            <>
+                              <th className="px-6 py-3 text-left text-[12px] font-semibold text-[#3C3C43] uppercase tracking-wider">Subject ID</th>
+                              <th className="px-6 py-3 text-left text-[12px] font-semibold text-[#3C3C43] uppercase tracking-wider">Name</th>
+                              <th className="px-6 py-3 text-left text-[12px] font-semibold text-[#3C3C43] uppercase tracking-wider">Class</th>
+                              <th className="px-6 py-3 text-left text-[12px] font-semibold text-[#3C3C43] uppercase tracking-wider">Teacher ID</th>
                             </>
                           )}
                           <th className="px-6 py-3 text-center text-[12px] font-semibold text-[#3C3C43] uppercase tracking-wider">Status</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[rgba(0,0,0,0.05)]">
-                        {importType === 'users' ? (
-                          <>
-                            <tr className="hover:bg-white/50 transition-colors">
-                              <td className="px-6 py-4 whitespace-nowrap text-[15px] font-medium text-black">ครูสมศรี ดีใจ</td>
-                              <td className="px-6 py-4 whitespace-nowrap text-[15px] font-mono text-[#3C3C43]">teacher_somsri</td>
-                              <td className="px-6 py-4 whitespace-nowrap text-[15px] text-[#3C3C43]">Teacher</td>
-                              <td className="px-6 py-4 whitespace-nowrap text-center">
-                                <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[13px] font-semibold bg-[#34C759]/10 text-[#34C759] border border-[#34C759]/20">
-                                  <CheckCircle className="w-3.5 h-3.5 mr-1" /> Valid
-                                </span>
-                              </td>
-                            </tr>
-                            <tr className="bg-[#FF3B30]/5 hover:bg-[#FF3B30]/10 transition-colors">
-                              <td className="px-6 py-4 whitespace-nowrap text-[15px] font-medium text-black">ครูสมชาย</td>
-                              <td className="px-6 py-4 whitespace-nowrap text-[15px] font-mono text-[#FF3B30] font-bold">Missing</td>
-                              <td className="px-6 py-4 whitespace-nowrap text-[15px] text-[#3C3C43]">Teacher</td>
-                              <td className="px-6 py-4 whitespace-nowrap text-center">
-                                <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[13px] font-semibold bg-[#FF3B30]/10 text-[#FF3B30] border border-[#FF3B30]/20">
-                                  <AlertCircle className="w-3.5 h-3.5 mr-1" /> Error
-                                </span>
-                              </td>
-                            </tr>
-                          </>
-                        ) : (
-                          <>
-                            <tr className="hover:bg-white/50 transition-colors">
-                              <td className="px-6 py-4 whitespace-nowrap text-[15px] font-mono text-[#3C3C43]">1100112233445</td>
-                              <td className="px-6 py-4 whitespace-nowrap text-[15px] font-medium text-black">ด.ช. สมชาย ใจดี</td>
-                              <td className="px-6 py-4 whitespace-nowrap text-[15px] text-[#3C3C43]">ป.1</td>
-                              <td className="px-6 py-4 whitespace-nowrap text-center">
-                                <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[13px] font-semibold bg-[#34C759]/10 text-[#34C759] border border-[#34C759]/20">
-                                  <CheckCircle className="w-3.5 h-3.5 mr-1" /> Valid
-                                </span>
-                              </td>
-                            </tr>
-                            <tr className="hover:bg-white/50 transition-colors">
-                              <td className="px-6 py-4 whitespace-nowrap text-[15px] font-mono text-[#3C3C43]">1100112233446</td>
-                              <td className="px-6 py-4 whitespace-nowrap text-[15px] font-medium text-black">ด.ญ. สมหญิง รักเรียน</td>
-                              <td className="px-6 py-4 whitespace-nowrap text-[15px] text-[#3C3C43]">ป.3</td>
-                              <td className="px-6 py-4 whitespace-nowrap text-center">
-                                <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[13px] font-semibold bg-[#34C759]/10 text-[#34C759] border border-[#34C759]/20">
-                                  <CheckCircle className="w-3.5 h-3.5 mr-1" /> Valid
-                                </span>
-                              </td>
-                            </tr>
-                            <tr className="bg-[#FF3B30]/5 hover:bg-[#FF3B30]/10 transition-colors">
-                              <td className="px-6 py-4 whitespace-nowrap text-[15px] font-mono text-[#FF3B30] font-bold">Missing</td>
-                              <td className="px-6 py-4 whitespace-nowrap text-[15px] font-medium text-black">ด.ช. มานะ อดทน</td>
-                              <td className="px-6 py-4 whitespace-nowrap text-[15px] text-[#3C3C43]">ป.4</td>
-                              <td className="px-6 py-4 whitespace-nowrap text-center">
-                                <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[13px] font-semibold bg-[#FF3B30]/10 text-[#FF3B30] border border-[#FF3B30]/20">
-                                  <AlertCircle className="w-3.5 h-3.5 mr-1" /> Error
-                                </span>
-                              </td>
-                            </tr>
-                          </>
+                        {parsedData.slice(0, 10).map((row, index) => {
+                          let isValid = false;
+                          if (importType === 'users') {
+                            const name = row.Name || row.name || row['ชื่อ-สกุล'];
+                            const username = row.Username || row.username;
+                            isValid = !!(name && username);
+                            
+                            return (
+                              <tr key={index} className={isValid ? "hover:bg-white/50 transition-colors" : "bg-[#FF3B30]/5 hover:bg-[#FF3B30]/10 transition-colors"}>
+                                <td className="px-6 py-4 whitespace-nowrap text-[15px] font-medium text-black">{name || <span className="text-[#FF3B30] font-bold">Missing</span>}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-[15px] font-mono text-[#3C3C43]">{username || <span className="text-[#FF3B30] font-bold">Missing</span>}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-[15px] text-[#3C3C43]">{row.Role || row.role || 'teacher'}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-center">
+                                  {isValid ? (
+                                    <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[13px] font-semibold bg-[#34C759]/10 text-[#34C759] border border-[#34C759]/20">
+                                      <CheckCircle className="w-3.5 h-3.5 mr-1" /> Valid
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[13px] font-semibold bg-[#FF3B30]/10 text-[#FF3B30] border border-[#FF3B30]/20">
+                                      <AlertCircle className="w-3.5 h-3.5 mr-1" /> Error
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          } else if (importType === 'students') {
+                            const nationalId = row.NationalId || row.nationalId || row['เลขประจำตัวประชาชน'] || row['Student ID'];
+                            const name = row.Name || row.name || row['ชื่อ-สกุล'];
+                            isValid = !!(nationalId && name);
+                            
+                            return (
+                              <tr key={index} className={isValid ? "hover:bg-white/50 transition-colors" : "bg-[#FF3B30]/5 hover:bg-[#FF3B30]/10 transition-colors"}>
+                                <td className="px-6 py-4 whitespace-nowrap text-[15px] font-mono text-[#3C3C43]">{nationalId || <span className="text-[#FF3B30] font-bold">Missing</span>}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-[15px] font-medium text-black">{name || <span className="text-[#FF3B30] font-bold">Missing</span>}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-[15px] text-[#3C3C43]">{row.Grade || row.grade || row.gradeLevel || row['ชั้นเรียน'] || '-'}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-center">
+                                  {isValid ? (
+                                    <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[13px] font-semibold bg-[#34C759]/10 text-[#34C759] border border-[#34C759]/20">
+                                      <CheckCircle className="w-3.5 h-3.5 mr-1" /> Valid
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[13px] font-semibold bg-[#FF3B30]/10 text-[#FF3B30] border border-[#FF3B30]/20">
+                                      <AlertCircle className="w-3.5 h-3.5 mr-1" /> Error
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          } else {
+                            const id = row.Id || row.id || row['รหัสวิชา'];
+                            const name = row.Name || row.name || row['ชื่อวิชา'];
+                            const className = row.ClassName || row.className || row['ชั้นเรียน'];
+                            isValid = !!(name && className);
+                            
+                            return (
+                              <tr key={index} className={isValid ? "hover:bg-white/50 transition-colors" : "bg-[#FF3B30]/5 hover:bg-[#FF3B30]/10 transition-colors"}>
+                                <td className="px-6 py-4 whitespace-nowrap text-[15px] font-mono text-[#3C3C43]">{id || <span className="text-[#8E8E93] italic">Auto</span>}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-[15px] font-medium text-black">{name || <span className="text-[#FF3B30] font-bold">Missing</span>}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-[15px] text-[#3C3C43]">{className || <span className="text-[#FF3B30] font-bold">Missing</span>}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-[15px] text-[#3C3C43]">{row.TeacherId || row.teacherId || row['รหัสครูผู้สอน'] || '-'}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-center">
+                                  {isValid ? (
+                                    <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[13px] font-semibold bg-[#34C759]/10 text-[#34C759] border border-[#34C759]/20">
+                                      <CheckCircle className="w-3.5 h-3.5 mr-1" /> Valid
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[13px] font-semibold bg-[#FF3B30]/10 text-[#FF3B30] border border-[#FF3B30]/20">
+                                      <AlertCircle className="w-3.5 h-3.5 mr-1" /> Error
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          }
+                        })}
+                        {parsedData.length > 10 && (
+                          <tr>
+                            <td colSpan={4} className="px-6 py-4 text-center text-[13px] text-[#8E8E93] font-medium">
+                              And {parsedData.length - 10} more rows...
+                            </td>
+                          </tr>
                         )}
                       </tbody>
                     </table>
@@ -1477,12 +1616,7 @@ export default function AdminDashboard({ subjects, students, grades, users, onUp
                   Cancel
                 </button>
                 <button 
-                  onClick={() => {
-                    setAlertMessage('นำเข้าข้อมูลสำเร็จ!');
-                    setIsImportingData(false);
-                    setImportStep('upload');
-                    setSelectedFile(null);
-                  }}
+                  onClick={handleConfirmImport}
                   className="px-6 py-2.5 rounded-[14px] text-[15px] font-semibold text-white bg-[#007AFF] shadow-lg shadow-[#007AFF]/30 transition-all hover:bg-[#0056b3]"
                 >
                   Confirm & Import
@@ -1492,6 +1626,78 @@ export default function AdminDashboard({ subjects, students, grades, users, onUp
           </div>
         </div>
       )}
+      {/* Add Student Modal */}
+      {isAddingStudent && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="glass-card w-full max-w-md p-6 animate-in fade-in zoom-in duration-200">
+            <h3 className="text-[20px] font-bold text-black mb-4 flex items-center">
+              <Users className="w-5 h-5 mr-2 text-[#FF00FF]" />
+              เพิ่มนักเรียนใหม่
+            </h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[13px] font-semibold text-[#3C3C43] mb-1.5 uppercase tracking-wider">เลขประจำตัวประชาชน</label>
+                <input
+                  type="text"
+                  value={newStudent.nationalId || ''}
+                  onChange={(e) => setNewStudent({ ...newStudent, nationalId: e.target.value })}
+                  className="glow-input w-full py-2.5 px-4 text-[15px]"
+                  placeholder="1100112233445"
+                />
+              </div>
+              <div>
+                <label className="block text-[13px] font-semibold text-[#3C3C43] mb-1.5 uppercase tracking-wider">ชื่อ-สกุล</label>
+                <input
+                  type="text"
+                  value={newStudent.name || ''}
+                  onChange={(e) => setNewStudent({ ...newStudent, name: e.target.value })}
+                  className="glow-input w-full py-2.5 px-4 text-[15px]"
+                  placeholder="ด.ช. สมชาย ใจดี"
+                />
+              </div>
+              <div>
+                <label className="block text-[13px] font-semibold text-[#3C3C43] mb-1.5 uppercase tracking-wider">ชั้นเรียน</label>
+                <input
+                  type="text"
+                  value={newStudent.gradeLevel || ''}
+                  onChange={(e) => setNewStudent({ ...newStudent, gradeLevel: e.target.value })}
+                  className="glow-input w-full py-2.5 px-4 text-[15px]"
+                  placeholder="ป.1"
+                />
+              </div>
+              <div>
+                <label className="block text-[13px] font-semibold text-[#3C3C43] mb-1.5 uppercase tracking-wider">วันเดือนปีเกิด (DDMMYY)</label>
+                <input
+                  type="text"
+                  value={newStudent.dob || ''}
+                  onChange={(e) => setNewStudent({ ...newStudent, dob: e.target.value })}
+                  className="glow-input w-full py-2.5 px-4 text-[15px]"
+                  placeholder="010150"
+                />
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end space-x-3">
+              <button 
+                onClick={() => {
+                  setIsAddingStudent(false);
+                  setNewStudent({});
+                }}
+                className="px-5 py-2 rounded-[12px] text-[15px] font-semibold text-[#3C3C43] bg-[#E5E5EA] hover:bg-[#D1D1D6] transition-colors"
+              >
+                ยกเลิก
+              </button>
+              <button 
+                onClick={handleSaveNewStudent} 
+                className="px-5 py-2 rounded-[12px] text-[15px] font-semibold glow-button flex items-center"
+              >
+                <Save className="w-4 h-4 mr-1.5" />
+                บันทึก
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add Subject Modal */}
       {isAddingSubject && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">

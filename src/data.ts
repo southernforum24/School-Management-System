@@ -32,7 +32,7 @@ export const initialSubjects: Subject[] = [
   },
   {
     id: 'sub2',
-    name: 'ภาษาไทย ป.3',
+    name: 'เตรียมความพร้อมประเมิน NT ป.3',
     className: 'ป.3',
     teacherId: 'u2',
     status: 'Pending Admin Verification',
@@ -45,7 +45,7 @@ export const initialSubjects: Subject[] = [
   },
   {
     id: 'sub3',
-    name: 'ภาษาไทย ป.6',
+    name: 'ติวสอบ O-NET ป.6',
     className: 'ป.6',
     teacherId: 'u2',
     status: 'Verified',
